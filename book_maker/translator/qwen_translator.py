@@ -1,9 +1,11 @@
 import re
 import time
+import random
 from rich import print
 from openai import OpenAI
 
 from .base_translator import Base
+from ..config import config
 
 
 class QwenTranslator(Base):
@@ -99,12 +101,22 @@ class QwenTranslator(Base):
         self.context_translated_list = []
         self.context_paragraph_limit = context_paragraph_limit
 
+        # Rate limiting configuration
+        self.rate_limit_config = config.get("translator", {}).get("qwen", {}).get("rate_limit", {})
+        self.max_retries = self.rate_limit_config.get("max_retries", 5)
+        self.base_delay = self.rate_limit_config.get("base_delay", 1.0)
+        self.max_delay = self.rate_limit_config.get("max_delay", 60.0)
+        self.batch_size = self.rate_limit_config.get("batch_size", 5)
+        self.delay_between_requests = self.rate_limit_config.get("delay_between_requests", 0.5)
+        self.delay_between_batches = self.rate_limit_config.get("delay_between_batches", 2.0)
+
         print("[bold blue]Qwen Translator initialized:[/bold blue]")
         print(f"  Model: {self.model}")
         print(f"  Source Language: {self.source_lang}")
         print(f"  Target Language: {self.target_lang}")
         if self.domain_hint:
             print(f"  Domain Hint: {self.domain_hint}")
+        print(f"  Rate limit protection: {self.max_retries} max retries, {self.batch_size} batch size")
 
     def rotate_key(self):
         """Rotate API key for load balancing"""
@@ -165,14 +177,13 @@ class QwenTranslator(Base):
             self.context_translated_list.pop(0)
 
     def translate(self, text):
-        """Main translation method"""
+        """Main translation method with improved error handling"""
         start_time = time.time()
 
         attempt_count = 0
-        max_attempts = 3
         t_text = ""
 
-        while attempt_count < max_attempts:
+        while attempt_count < self.max_retries:
             try:
                 self.rotate_key()
 
@@ -203,22 +214,72 @@ class QwenTranslator(Base):
 
             except Exception as e:
                 attempt_count += 1
+                error_msg = str(e).lower()
+                
+                # Check for specific error types
+                is_rate_limit = any(keyword in error_msg for keyword in 
+                                   ["rate", "limit", "429", "too many requests", "quota"])
+                is_server_error = any(keyword in error_msg for keyword in 
+                                     ["server", "500", "502", "503", "504", "timeout"])
+                
                 print(
-                    f"[red]Translation attempt {attempt_count} failed: {str(e)}[/red]"
+                    f"[red]Translation attempt {attempt_count} failed: {type(e).__name__}: {str(e)[:100]}[/red]"
                 )
-
-                if attempt_count >= max_attempts:
+                
+                if attempt_count >= self.max_retries:
                     print(
-                        f"[red]Translation failed after {max_attempts} attempts[/red]"
+                        f"[bold red]Translation failed after {self.max_retries} attempts[/bold red]"
                     )
                     t_text = text  # Fallback to original text
+                    # Log the failure for debugging
+                    self._log_translation_failure(text, str(e))
                 else:
-                    time.sleep(1)  # Wait before retry
+                    # Exponential backoff with jitter
+                    wait_time = self._calculate_wait_time(attempt_count, is_rate_limit, is_server_error)
+                    print(f"[yellow]Waiting {wait_time:.1f}s before retry...[/yellow]")
+                    time.sleep(wait_time)
 
         end_time = time.time()
         print(f"[dim]Translation time: {end_time - start_time:.2f}s[/dim]")
 
         return t_text
+    
+    def _calculate_wait_time(self, attempt_count, is_rate_limit=False, is_server_error=False):
+        """Calculate wait time with exponential backoff and jitter"""
+        base_wait = self.base_delay
+        
+        if is_rate_limit:
+            # Longer wait for rate limits
+            base_wait = self.base_delay * 5
+        elif is_server_error:
+            # Moderate wait for server errors
+            base_wait = self.base_delay * 2
+        
+        # Exponential backoff: 2^attempt_count * base_wait
+        wait_time = base_wait * (2 ** (attempt_count - 1))
+        
+        # Add jitter (±20%)
+        jitter = random.uniform(0.8, 1.2)
+        wait_time *= jitter
+        
+        # Cap at max_delay
+        return min(wait_time, self.max_delay)
+    
+    def _log_translation_failure(self, text, error_msg):
+        """Log translation failures for debugging"""
+        import os
+        log_dir = "log"
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+        
+        log_file = os.path.join(log_dir, "translation_errors.txt")
+        with open(log_file, "a", encoding="utf-8") as f:
+            import datetime
+            timestamp = datetime.datetime.now().isoformat()
+            f.write(f"[{timestamp}] Translation failed:\n")
+            f.write(f"  Error: {error_msg}\n")
+            f.write(f"  Text: {text[:200]}...\n")
+            f.write("-" * 80 + "\n")
 
     def set_terminology(self, terminology):
         """Set custom terminology for translation
@@ -254,3 +315,37 @@ class QwenTranslator(Base):
             print(
                 f"[red]Invalid Qwen model: {model_name}. Using default: {self.model}[/red]"
             )
+    
+    def translate_list(self, text_list):
+        """
+        Translate a list of texts with rate limiting protection.
+        This method adds delays between translations to avoid hitting rate limits.
+        """
+        if not text_list:
+            return []
+        
+        results = []
+        
+        print(f"[blue]Translating {len(text_list)} texts with rate limiting protection...[/blue]")
+        print(f"[dim]Batch size: {self.batch_size}, Delay between requests: {self.delay_between_requests}s[/dim]")
+        
+        for i, text in enumerate(text_list):
+            try:
+                # Translate the text
+                translated = self.translate(text)
+                results.append(translated)
+                
+                # Add delay between requests (except after the last one)
+                if i < len(text_list) - 1:
+                    time.sleep(self.delay_between_requests)
+                
+                # Add longer delay between batches
+                if (i + 1) % self.batch_size == 0 and i < len(text_list) - 1:
+                    print(f"[yellow]Processed {i+1}/{len(text_list)} texts. Waiting {self.delay_between_batches}s before next batch...[/yellow]")
+                    time.sleep(self.delay_between_batches)
+                    
+            except Exception as e:
+                print(f"[red]Failed to translate text {i+1}: {str(e)[:100]}[/red]")
+                results.append(text)  # Fallback to original text
+        
+        return results

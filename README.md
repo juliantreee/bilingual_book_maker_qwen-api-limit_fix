@@ -9,7 +9,7 @@ Translation attempt 1 failed: Error code: 429 - {'error': {'message': 'You have 
 'limit_requests', 'param': None, 'code': 'limit_requests'}
 ```
 
-该项目由OpenClaw修改，下面是OpenClaw的修复总结
+# 该项目由OpenClaw修改，下面是OpenClaw的修复总结
                                            
                                                                                                                                                           
  ### 1. 改进了错误处理机制                                                                                                                                
@@ -81,6 +81,9 @@ Translation attempt 1 failed: Error code: 429 - {'error': {'message': 'You have 
  2. book_maker/config.py - 添加了速率限制配置                                                                                                             
                                                                                                                                                           
  这些修复应该能够显著减少因API调用过多导致的访问被禁止问题，同 时保持翻译的稳定性和可靠性。  
+
+
+ # 下面是原README.md的内容
 
 
 

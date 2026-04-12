@@ -89,9 +89,10 @@ Translation attempt 1 failed: Error code: 429 - {'error': {'message': 'You have 
 2.使用cd / 来到根目录  
 3.使用ls 查看当前目录有什么文件,你应该会看到bilingual_book_maker_qwen-api-limit_fix  
 4.使用cd bilingual_book_maker_qwen-api-limit_fix,进入这个目录    
-5.然后就可以使用python make_book.py --book_name "" --qwen_key "" --model qwen-mt-plus了  
-***注意***  
-***输完命令要回车！！！***
+5.使用source bbook/bin/activate 进入bbook虚拟环境  
+6.然后就可以使用python make_book.py --book_name "" --qwen_key "" --model qwen-mt-plus了  
+**注意**  
+**输完命令要回车！！！**
 
 
 
